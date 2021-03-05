@@ -3,6 +3,7 @@ use jack::{
     AudioOut, Client, ClientOptions, Control, NotificationHandler, Port, ProcessHandler,
     ProcessScope,
 };
+use itertools::izip;
 
 struct Ports {
     x: Port<AudioOut>,
@@ -29,13 +30,15 @@ struct RTProcess {
 
 impl ProcessHandler for RTProcess {
     fn process(&mut self, _: &Client, ps: &ProcessScope) -> Control {
-        // todo!()
         let x_out = self.ports.x.as_mut_slice(ps);
+        let y_out = self.ports.y.as_mut_slice(ps);
+        let z_out = self.ports.z.as_mut_slice(ps);
 
-        for v in x_out.iter_mut() {
-            let x = 2.0*std::f64::consts::PI*self.t;
-            let y = x.sin();
-            *v = y as f32;
+        for (x, y, z) in izip!(x_out.iter_mut(), y_out.iter_mut(), z_out.iter_mut()) {
+            *x = 0.0f32;
+            *y = 0.0f32;
+            *z = 0.0f32;
+
             self.t += self.frame_t;
         }
 
