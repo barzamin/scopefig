@@ -1,9 +1,9 @@
 use anyhow::Result;
+use itertools::izip;
 use jack::{
     AudioOut, Client, ClientOptions, Control, NotificationHandler, Port, ProcessHandler,
     ProcessScope,
 };
-use itertools::izip;
 
 struct Ports {
     x: Port<AudioOut>,
@@ -14,9 +14,9 @@ struct Ports {
 impl Ports {
     pub fn new(client: &Client) -> Result<Self, jack::Error> {
         Ok(Self {
-            x: client.register_port("x_out", AudioOut::default())?,
-            y: client.register_port("y_out", AudioOut::default())?,
-            z: client.register_port("z_out", AudioOut::default())?,
+            x: client.register_port("x", AudioOut::default())?,
+            y: client.register_port("y", AudioOut::default())?,
+            z: client.register_port("z", AudioOut::default())?,
         })
     }
 }
@@ -28,6 +28,8 @@ struct RTProcess {
     t: f64,
 }
 
+const SCAN_RATE: f64 = 100.; // 100hz => 2pi rad around the cardioid per 1/100 s.
+
 impl ProcessHandler for RTProcess {
     fn process(&mut self, _: &Client, ps: &ProcessScope) -> Control {
         let x_out = self.ports.x.as_mut_slice(ps);
@@ -35,9 +37,11 @@ impl ProcessHandler for RTProcess {
         let z_out = self.ports.z.as_mut_slice(ps);
 
         for (x, y, z) in izip!(x_out.iter_mut(), y_out.iter_mut(), z_out.iter_mut()) {
-            *x = 0.0f32;
-            *y = 0.0f32;
-            *z = 0.0f32;
+            let t = self.t * 2. * std::f64::consts::PI * SCAN_RATE;
+            *x = t.cos() as f32;
+            *y = t.sin() as f32;
+
+            *z = 0.; // we'll just ignore this for now
 
             self.t += self.frame_t;
         }
@@ -68,8 +72,6 @@ fn main() -> Result<()> {
     client.activate_async(notif_handler, process_handler)?;
 
     loop {} // spin
-
-    // client.de();
 
     Ok(())
 }
