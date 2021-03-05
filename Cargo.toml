@@ -1,0 +1,9 @@
+[package]
+name = "scopefig"
+version = "0.1.0"
+authors = ["Erin Moon <erin@hecke.rs>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0"
+jack = "0.6"
