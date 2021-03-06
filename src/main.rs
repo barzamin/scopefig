@@ -40,8 +40,8 @@ impl ProcessHandler for RTProcess {
 
         for (x, y, z) in izip!(x_out.iter_mut(), y_out.iter_mut(), z_out.iter_mut()) {
             let t = self.t * 2. * std::f64::consts::PI * SCAN_RATE;
-            *x = t.cos() as f32;
-            *y = t.sin() as f32;
+            *x = (( 16.*t.sin().powi(3) )/18.) as f32;
+            *y = (( 13.*t.cos() - 5.*(2.*t).cos() - 2.*(3.*t).cos() - (4.*t).cos() )/18.) as f32;
 
             *z = 0.; // we'll just ignore this for now
 
@@ -76,7 +76,9 @@ fn main() -> Result<()> {
     let notif_handler = NotifProcess {};
     let active_client = client.activate_async(notif_handler, process_handler)?;
 
-    loop {}
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
     active_client.deactivate()?;
 
     Ok(())
