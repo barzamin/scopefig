@@ -5,6 +5,7 @@ use jack::{
     ProcessScope,
 };
 
+#[derive(Debug)]
 struct Ports {
     x: Port<AudioOut>,
     y: Port<AudioOut>,
@@ -21,6 +22,7 @@ impl Ports {
     }
 }
 
+#[derive(Debug)]
 struct RTProcess {
     ports: Ports,
     sample_rate: usize,
@@ -62,16 +64,20 @@ impl NotificationHandler for NotifProcess {
 fn main() -> Result<()> {
     let (client, _status) = Client::new("scopefig", ClientOptions::NO_START_SERVER)?;
 
+    let ports = Ports::new(&client)?;
+
     let process_handler = RTProcess {
-        ports: Ports::new(&client)?,
+        ports,
         sample_rate: client.sample_rate(),
         frame_t: 1.0 / client.sample_rate() as f64,
         t: 0.0f64,
     };
-    let notif_handler = NotifProcess {};
-    client.activate_async(notif_handler, process_handler)?;
 
-    loop {} // spin
+    let notif_handler = NotifProcess {};
+    let active_client = client.activate_async(notif_handler, process_handler)?;
+
+    loop {}
+    active_client.deactivate()?;
 
     Ok(())
 }
