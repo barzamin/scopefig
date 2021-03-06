@@ -40,10 +40,14 @@ impl ProcessHandler for RTProcess {
 
         for (x, y, z) in izip!(x_out.iter_mut(), y_out.iter_mut(), z_out.iter_mut()) {
             let t = self.t * 2. * std::f64::consts::PI * SCAN_RATE;
-            *x = (( 16.*t.sin().powi(3) )/18.) as f32;
-            *y = (( 13.*t.cos() - 5.*(2.*t).cos() - 2.*(3.*t).cos() - (4.*t).cos() )/18.) as f32;
 
-            *z = 0.; // we'll just ignore this for now
+            let scl = (1.-0.2)-(self.t*2.*std::f64::consts::PI*0.5).cos()*0.2;
+
+            *x = (scl*( 16.*t.sin().powi(3) )/18.) as f32;
+            *y = (scl*( 13.*t.cos() - 5.*(2.*t).cos() - 2.*(3.*t).cos() - (4.*t).cos() )/18.) as f32;
+
+            // *z = if (t % 1.) > 0.5 { 1.0 } else {0.0} as f32;
+            *z = 0.;
 
             self.t += self.frame_t;
         }
