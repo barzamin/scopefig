@@ -25,18 +25,42 @@ struct Args {
 }
 
 const F_s: u32 = 44_100; // Hz
-const DRAW_VELOCITY: f32 = 50.; // units/s
-                                  // const TRANSIT_VELOCITY: f32 = 40000.; // units/s
+const DRAW_DWELL: f32 = 0.01; // s/unit
+const JUMP_TIME: f32 = 0.0005; // sec per jump
 const TOLERANCE: f32 = 0.001;
 
 fn draw_line(pts: &mut Vec<Point<f32>>, line: LineSegment<f32>) {
-    log::debug!("emit line {:?}", line);
+    // log::debug!("emit line {:?}", line);
 
-    let n_samples: usize = (F_s as f32 * line.length() / DRAW_VELOCITY).trunc() as usize;
-    log::debug!("  drawing line with n_samples: {}", n_samples);
+    let n_samples: usize = (F_s as f32 * line.length() * DRAW_DWELL).trunc() as usize;
+    // log::debug!("  drawing line with n_samples: {}", n_samples);
     for t in (0..n_samples).map(|i| i as f32 / n_samples as f32) {
+        // log::trace!("    generate pt t : {}, sample : {:?}", t, line.sample(t));
+        pts.push(line.sample(t));
+    }
+}
+
+fn jump_easing(k: i32, x: f32) -> f32 {
+    if x <= 0.5 {
+        (1./(0.5f32).powi(k-1)) * x.powi(k)
+    } else {
+        1. - (-2. * x + 2.).powi(k) / 2.
+    }
+}
+
+fn jump(pts: &mut Vec<Point<f32>>, from: Option<Point<f32>>, to: Point<f32>) {
+    log::debug!("emit jump {:?} -> {:?}", from, to);
+
+    if let Some(from) = from {
+        let line = LineSegment { from, to };
+        let n_samples: usize = (F_s as f32 * line.length() * JUMP_TIME).trunc() as usize;
+        log::debug!("  jump with n_samples: {}", n_samples);
+        for t in (0..n_samples).map(|i| i as f32 / n_samples as f32).map(|t| jump_easing(10, t)) {
         log::trace!("    generate pt t : {}, sample : {:?}", t, line.sample(t));
         pts.push(line.sample(t));
+    }
+    } else {
+        pts.push(to);
     }
 }
 
@@ -94,7 +118,7 @@ fn main() -> Result<()> {
     let opt = usvg::Options::default();
     let tree = usvg::Tree::from_file(args.input, &opt)?;
 
-    let mut pts: Vec<Point<f32>> = vec![];
+    let mut pts: Vec<Point<f32>> = vec![/*Point::new(0., 0.)*/];
 
     let view_box = tree.svg_node().view_box;
     let size = tree.svg_node().size;
@@ -111,11 +135,8 @@ fn main() -> Result<()> {
                 log::trace!(" -> {:?}", evt);
                 match evt {
                     lyon_path::Event::Begin { at } => {
-                        // slew at full speed to point
-                        if let Some(last) = pts.last() {
-                        } else {
-                        }
-                        pts.push(txform.transform_point(at));
+                        let last = pts.last().cloned();
+                        jump(&mut pts, last, txform.transform_point(at));
                     }
                     lyon_path::Event::End { last, first, close } => {
                         if close {
@@ -123,6 +144,7 @@ fn main() -> Result<()> {
                                 from: txform.transform_point(last),
                                 to: txform.transform_point(first),
                             };
+                            println!("--> CLOSING");
                             draw_line(&mut pts, line);
                         }
                     }
@@ -140,6 +162,24 @@ fn main() -> Result<()> {
             }
         }
     }
+
+    let last = pts.last().cloned();
+    jump(&mut pts, last, Point::new(0., 0.0));
+
+    let mut root = BitMapBackend::new("plot.png", (600, 600)).into_drawing_area();
+    root.fill(&WHITE)?;
+    let root = root.apply_coord_spec(Cartesian2d::<RangedCoordf32, RangedCoordf32>::new(
+        -1f32..1f32,
+        -1f32..1f32,
+        // min_x..max_x,
+        // min_y..max_y,
+        (0..600, 0..600),
+    ));
+
+    for pt in &pts {
+        root.draw(&(EmptyElement::at((pt.x, pt.y)) + Circle::new((0, 0), 3, ShapeStyle::from(&BLACK).filled())))?;
+    }
+
 
     write_wav(BufWriter::new(File::create(args.output)?), &pts)?;
 
