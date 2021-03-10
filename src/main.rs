@@ -141,34 +141,6 @@ fn main() -> Result<()> {
         }
     }
 
-    let max_x = pts
-        .iter()
-        .map(|pt| pt.x)
-        .max_by(|a, b| a.partial_cmp(b).expect("Tried to compare a NaN"))
-        .unwrap();
-    let max_y = pts
-        .iter()
-        .map(|pt| pt.y)
-        .max_by(|a, b| a.partial_cmp(b).expect("Tried to compare a NaN"))
-        .unwrap();
-    let min_x = pts
-        .iter()
-        .map(|pt| pt.x)
-        .min_by(|a, b| a.partial_cmp(b).expect("Tried to compare a NaN"))
-        .unwrap();
-    let min_y = pts
-        .iter()
-        .map(|pt| pt.y)
-        .min_by(|a, b| a.partial_cmp(b).expect("Tried to compare a NaN"))
-        .unwrap();
-    log::debug!(
-        "normalized! max x={:.20}, y={:.20}; min x={:.20}, y={:.20}",
-        max_x,
-        max_y,
-        min_x,
-        min_y
-    );
-
     write_wav(BufWriter::new(File::create(args.output)?), &pts)?;
 
     Ok(())
