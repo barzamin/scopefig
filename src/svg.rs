@@ -21,7 +21,6 @@ impl<'l> Iterator for PathConvIter<'l> {
         }
 
         let next = self.iter.next();
-        println!("{:?}", next);
         match next {
             Some(usvg::PathSegment::MoveTo { x, y }) => {
                 if self.needs_end {
