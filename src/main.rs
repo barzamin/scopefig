@@ -8,11 +8,11 @@ use hound::WavWriter;
 use kv_log_macro as log;
 use anyhow::{anyhow, Result};
 use lyon_geom::{LineSegment, Point};
-use lyon_path::iterator::Flattened;
+use lyon_path::{PathEvent, iterator::Flattened};
 use lyon_path::Path;
-use lyon_svg::path_utils;
-use roxmltree::{Document, NodeType};
 use structopt::StructOpt;
+use usvg::prelude::*;
+// use plotters::{coord::types::RangedCoordf32, prelude::*};
 
 #[derive(Debug, StructOpt)]
 struct Args {
@@ -25,7 +25,7 @@ struct Args {
 
 const F_s: u32 = 44_100; // Hz
 const DRAW_VELOCITY: f32 = 10000.; // units/s
-const TOLERANCE: f32 = 0.01;
+const TOLERANCE: f32 = 0.1;
 
 // fn emit_pos<W>(w: &mut WavWriter<W>, pos: Point<f32>) -> Result<()> where W: Write + Seek {
 //     // log::trace!("slew to {:?}", pos);
@@ -44,6 +44,111 @@ fn draw_line(pts: &mut Vec<Point<f32>>, line: LineSegment<f32>) {
         pts.push(line.sample(t));
     }
 }
+
+fn point(x: &f64, y: &f64) -> Point<f32> {
+    Point::new(*x as f32, *y as f32)
+}
+
+pub struct PathConvIter<'a> {
+    iter: std::slice::Iter<'a, usvg::PathSegment>,
+    prev: Point<f32>,
+    first: Point<f32>,
+    needs_end: bool,
+    deferred: Option<PathEvent>,
+}
+
+impl<'l> Iterator for PathConvIter<'l> {
+    type Item = PathEvent;
+    fn next(&mut self) -> Option<PathEvent> {
+        if self.deferred.is_some() {
+            return self.deferred.take();
+        }
+
+        let next = self.iter.next();
+        println!("{:?}", next);
+        match next {
+            Some(usvg::PathSegment::MoveTo { x, y }) => {
+                if self.needs_end {
+                    let last = self.prev;
+                    let first = self.first;
+                    self.needs_end = false;
+                    self.prev = point(x, y);
+                    self.deferred = Some(PathEvent::Begin { at: self.prev });
+                    self.first = self.prev;
+                    Some(PathEvent::End {
+                        last,
+                        first,
+                        close: false,
+                    })
+                } else {
+                    self.first = point(x, y);
+                    self.prev = self.first;
+                    Some(PathEvent::Begin { at: self.first })
+                }
+            }
+            Some(usvg::PathSegment::LineTo { x, y }) => {
+                self.needs_end = true;
+                let from = self.prev;
+                self.prev = point(x, y);
+                Some(PathEvent::Line {
+                    from,
+                    to: self.prev,
+                })
+            }
+            Some(usvg::PathSegment::CurveTo {
+                x1,
+                y1,
+                x2,
+                y2,
+                x,
+                y,
+            }) => {
+                self.needs_end = true;
+                let from = self.prev;
+                self.prev = point(x, y);
+                Some(PathEvent::Cubic {
+                    from,
+                    ctrl1: point(x1, y1),
+                    ctrl2: point(x2, y2),
+                    to: self.prev,
+                })
+            }
+            Some(usvg::PathSegment::ClosePath) => {
+                self.needs_end = false;
+                self.prev = self.first;
+                Some(PathEvent::End {
+                    last: self.prev,
+                    first: self.first,
+                    close: true,
+                })
+            }
+            None => {
+                if self.needs_end {
+                    self.needs_end = false;
+                    let last = self.prev;
+                    let first = self.first;
+                    Some(PathEvent::End {
+                        last,
+                        first,
+                        close: false,
+                    })
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+pub fn convert_path<'a>(p: &'a usvg::Path) -> PathConvIter<'a> {
+    PathConvIter {
+        iter: p.data.iter(),
+        first: Point::new(0.0, 0.0),
+        prev: Point::new(0.0, 0.0),
+        deferred: None,
+        needs_end: false,
+    }
+}
 fn main() -> Result<()> {
     femme::with_level(femme::LevelFilter::Trace);
 
@@ -57,49 +162,40 @@ fn main() -> Result<()> {
 
     let mut wtr = hound::WavWriter::create(args.output, out_spec)?;
 
-    let doc_txt = fs::read_to_string(args.input)?;
-    let doc = Document::parse(&doc_txt)?;
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_file(args.input, &opt)?;
 
     let mut pts: Vec<Point<f32>> = vec![];
 
-    for node in doc.descendants() {
-        if node.node_type() != NodeType::Element {
-            // log::trace!("non-element: {:?}", node);
-            continue;
-        }
-
-        if node.tag_name().name() == "path" {
-            if let Some(d) = node.attribute("d") {
-                let path = path_utils::build_path(Path::builder().with_svg(), d).unwrap();
-                log::trace!("parsed Lyon path {:?}", path);
-
-                let flattened = Flattened::new(TOLERANCE, path.iter());
-                for evt in flattened {
-                    log::trace!(" -> {:?}", evt);
-                    match evt {
-                        lyon_path::Event::Begin { at } => {
-                            // slew at full speed to point
-                            pts.push(at);
-                        },
-                        lyon_path::Event::End { last, first, close } => {
-                            if close {
-                                let line = LineSegment { from: last, to: first };
-                                draw_line(&mut pts, line);
-                                // emit_pos(&mut wtr, first)?; // loop back if closed. TODO: slew speed.
-                            }
-                        },
-                        lyon_path::Event::Line { from, to } => {
-                            // emit_pos(&mut wtr, to)?; // go where we're supposed to. TODO: slew speed.
-                            let line = LineSegment { from, to };
-                            draw_line(&mut pts, line);
-                        },
-                        _ => {
-                            log::warn!("unsupported path element {:?}", evt);
+    for node in tree.root().descendants() {
+        if let usvg::NodeKind::Path(ref p) = *node.borrow() {
+            println!("{:?}", node);
+            let flattened = Flattened::new(TOLERANCE, convert_path(p));
+            for evt in flattened {
+                log::trace!(" -> {:?}", evt);
+                match evt {
+                    lyon_path::Event::Begin { at } => {
+                        // slew at full speed to point
+                        pts.push(at);
+                    },
+                    lyon_path::Event::End { last, first, close } => {
+                        if close {
+                            pts.push(first);
+                            // let line = LineSegment { from: last, to: first };
+                            // draw_line(&mut pts, line);
+                            // emit_pos(&mut wtr, first)?; // loop back if closed. TODO: slew speed.
                         }
+                    },
+                    lyon_path::Event::Line { from, to } => {
+                        // emit_pos(&mut wtr, to)?; // go where we're supposed to. TODO: slew speed.
+                        // let line = LineSegment { from, to };
+                        // draw_line(&mut pts, line);
+                        pts.push(to);
+                    },
+                    _ => {
+                        log::warn!("unsupported path element {:?}", evt);
                     }
                 }
-            } else {
-                log::warn!("path node {:?} without actual path data", node);
             }
         }
     }
@@ -132,9 +228,20 @@ fn main() -> Result<()> {
         .min_by(|a, b| a.partial_cmp(b).expect("Tried to compare a NaN")).unwrap();
     log::debug!("normalized! max x={}, y={}; min x={}, y={}", max_x, max_y, min_x, min_y);
 
+    // let mut root = BitMapBackend::new("plot.png", (600, 600)).into_drawing_area();
+    // root.fill(&WHITE)?;
+    // let root = root.apply_coord_spec(Cartesian2d::<RangedCoordf32, RangedCoordf32>::new(
+    //     // -1f32..1f32,
+    //     // -1f32..1f32,
+    //     min_x..max_x,
+    //     min_y..max_y,
+    //     (0..600, 0..600),
+    // ));
+
 
     for _ in 0..1000 {
         for pt in &pts {
+            // root.draw(&(EmptyElement::at((pt.x, pt.y)) + Circle::new((0, 0), 3, ShapeStyle::from(&BLACK).filled())))?;
             wtr.write_sample(pt.x)?;
             wtr.write_sample(pt.y)?;
         }
