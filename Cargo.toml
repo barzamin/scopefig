@@ -6,5 +6,5 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
-jack = "0.6"
-itertools = "0.10"
+hound = "3.4"
+svg = "0.9"
