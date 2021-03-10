@@ -10,6 +10,7 @@ use kv_log_macro as log;
 use lyon_geom::{LineSegment, Point};
 use lyon_path::Path;
 use lyon_path::{iterator::Flattened, PathEvent};
+use plotters::{coord::types::RangedCoordf32, prelude::*};
 use structopt::StructOpt;
 use usvg::{prelude::*, Align, FitTo, Size, Transform, ViewBox};
 
@@ -56,9 +57,9 @@ fn jump(pts: &mut Vec<Point<f32>>, from: Option<Point<f32>>, to: Point<f32>) {
         let n_samples: usize = (F_s as f32 * line.length() * JUMP_TIME).trunc() as usize;
         log::debug!("  jump with n_samples: {}", n_samples);
         for t in (0..n_samples).map(|i| i as f32 / n_samples as f32).map(|t| jump_easing(10, t)) {
-        log::trace!("    generate pt t : {}, sample : {:?}", t, line.sample(t));
-        pts.push(line.sample(t));
-    }
+            log::trace!("    generate pt t : {}, sample : {:?}", t, line.sample(t));
+            pts.push(line.sample(t));
+        }
     } else {
         pts.push(to);
     }
