@@ -28,7 +28,7 @@ struct Args {
 const F_s: u32 = 44_100; // Hz
 const DRAW_DWELL: f32 = 0.01; // s/unit
 const JUMP_TIME: f32 = 0.0005; // sec per jump
-const TOLERANCE: f32 = 0.001;
+const TOLERANCE: f32 = 0.01;
 
 fn draw_line(pts: &mut Vec<Point<f32>>, line: LineSegment<f32>) {
     // log::debug!("emit line {:?}", line);
