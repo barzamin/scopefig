@@ -13,3 +13,10 @@ kv-log-macro = "1.0"
 lyon_geom = "0.17"
 lyon_path = "0.17"
 usvg = "0.14"
+
+[features]
+debug_plot = ["plotters"]
+
+[dependencies.plotters]
+version = "0.3"
+optional = true

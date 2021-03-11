@@ -1,17 +1,17 @@
 use std::{
-    fs::{self, File},
+    fs::File,
     io::{BufWriter, Seek, Write},
     path::PathBuf,
 };
 
-use anyhow::{anyhow, Result};
-use hound::WavWriter;
+use anyhow::Result;
 use kv_log_macro as log;
 use lyon_geom::{LineSegment, Point};
-use lyon_path::Path;
-use lyon_path::{iterator::Flattened, PathEvent};
+use lyon_path::iterator::Flattened;
+#[cfg(feature = "debug_plot")]
+use plotters::{coord::types::RangedCoordf32, prelude::*};
 use structopt::StructOpt;
-use usvg::{prelude::*, Align, FitTo, Size, Transform, ViewBox};
+use usvg::{prelude::*, ViewBox};
 
 mod svg;
 
@@ -25,18 +25,45 @@ struct Args {
 }
 
 const F_s: u32 = 44_100; // Hz
-const DRAW_VELOCITY: f32 = 50.; // units/s
-                                  // const TRANSIT_VELOCITY: f32 = 40000.; // units/s
-const TOLERANCE: f32 = 0.001;
+const DRAW_DWELL: f32 = 0.01; // s/unit
+const JUMP_TIME: f32 = 0.0005; // sec per jump
+const TOLERANCE: f32 = 0.01;
 
 fn draw_line(pts: &mut Vec<Point<f32>>, line: LineSegment<f32>) {
-    log::debug!("emit line {:?}", line);
+    // log::debug!("emit line {:?}", line);
 
-    let n_samples: usize = (F_s as f32 * line.length() / DRAW_VELOCITY).trunc() as usize;
-    log::debug!("  drawing line with n_samples: {}", n_samples);
+    let n_samples: usize = ((F_s as f32 * line.length() * DRAW_DWELL).trunc() as usize).max(1);
+    // log::debug!("  drawing line with n_samples: {}", n_samples);
     for t in (0..n_samples).map(|i| i as f32 / n_samples as f32) {
-        log::trace!("    generate pt t : {}, sample : {:?}", t, line.sample(t));
+        // log::trace!("    generate pt t : {}, sample : {:?}", t, line.sample(t));
         pts.push(line.sample(t));
+    }
+}
+
+fn jump_easing(k: i32, x: f32) -> f32 {
+    if x <= 0.5 {
+        (1. / (0.5f32).powi(k - 1)) * x.powi(k)
+    } else {
+        1. - (-2. * x + 2.).powi(k) / 2.
+    }
+}
+
+fn jump(pts: &mut Vec<Point<f32>>, from: Option<Point<f32>>, to: Point<f32>) {
+    log::debug!("emit jump {:?} -> {:?}", from, to);
+
+    if let Some(from) = from {
+        let line = LineSegment { from, to };
+        let n_samples: usize = (F_s as f32 * line.length() * JUMP_TIME).trunc() as usize;
+        log::debug!("  jump with n_samples: {}", n_samples);
+        for t in (0..n_samples)
+            .map(|i| i as f32 / n_samples as f32)
+            .map(|t| jump_easing(10, t))
+        {
+            log::trace!("    generate pt t : {}, sample : {:?}", t, line.sample(t));
+            pts.push(line.sample(t));
+        }
+    } else {
+        pts.push(to);
     }
 }
 
@@ -63,27 +90,30 @@ where
     Ok(())
 }
 
+fn transform_usvg2euclid(tx: usvg::Transform) -> lyon_geom::Transform<f32> {
+    lyon_geom::Transform::<f32>::new(
+        tx.a as f32,
+        tx.b as f32,
+        tx.c as f32,
+        tx.d as f32,
+        tx.e as f32,
+        tx.f as f32,
+    )
+}
+
 fn transform(
     base_txform: usvg::Transform,
     view_box: ViewBox,
-    size: usvg::Size,
+    _size: usvg::Size,
 ) -> lyon_geom::Transform<f32> {
     let scale = (2. / view_box.rect.width().max(view_box.rect.height())) as f32;
     log::debug!("scale: {}", scale);
 
-    lyon_geom::Transform::<f32>::new(
-        base_txform.a as f32,
-        base_txform.b as f32,
-        base_txform.c as f32,
-        base_txform.d as f32,
-        base_txform.e as f32,
-        base_txform.f as f32,
-    )
-    .then_translate(lyon_geom::Vector::new(
+    transform_usvg2euclid(base_txform).then_translate(lyon_geom::Vector::new(
         (-view_box.rect.width() / 2.) as f32,
         (-view_box.rect.height() / 2.) as f32,
     ))
-    .then_scale(scale, scale)
+    .then_scale(scale, -scale)
 }
 
 fn main() -> Result<()> {
@@ -94,7 +124,7 @@ fn main() -> Result<()> {
     let opt = usvg::Options::default();
     let tree = usvg::Tree::from_file(args.input, &opt)?;
 
-    let mut pts: Vec<Point<f32>> = vec![];
+    let mut pts: Vec<Point<f32>> = vec![/*Point::new(0., 0.)*/];
 
     let view_box = tree.svg_node().view_box;
     let size = tree.svg_node().size;
@@ -104,18 +134,15 @@ fn main() -> Result<()> {
     for node in tree.root().descendants() {
         if let usvg::NodeKind::Path(ref p) = *node.borrow() {
             log::debug!("handling node {:?}", node);
-            let mut txform = transform(node.transform(), view_box, size);
-            println!("txform: {:?}", txform);
+            let txform = transform(node.transform(), view_box, size);
+            log::debug!("txform: {:?}", txform);
             let flattened = Flattened::new(TOLERANCE, svg::convert_path(p));
             for evt in flattened {
                 log::trace!(" -> {:?}", evt);
                 match evt {
                     lyon_path::Event::Begin { at } => {
-                        // slew at full speed to point
-                        if let Some(last) = pts.last() {
-                        } else {
-                        }
-                        pts.push(txform.transform_point(at));
+                        let last = pts.last().cloned();
+                        jump(&mut pts, last, txform.transform_point(at));
                     }
                     lyon_path::Event::End { last, first, close } => {
                         if close {
@@ -123,6 +150,7 @@ fn main() -> Result<()> {
                                 from: txform.transform_point(last),
                                 to: txform.transform_point(first),
                             };
+                            log::debug!("--> CLOSING");
                             draw_line(&mut pts, line);
                         }
                     }
@@ -138,6 +166,29 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+    }
+
+    let last = pts.last().cloned();
+    jump(&mut pts, last, Point::new(0., 0.0));
+
+    #[cfg(feature = "debug_plot")]
+    {
+        let mut root = BitMapBackend::new("plot.png", (600, 600)).into_drawing_area();
+        root.fill(&WHITE)?;
+        let root = root.apply_coord_spec(Cartesian2d::<RangedCoordf32, RangedCoordf32>::new(
+            -1f32..1f32,
+            -1f32..1f32,
+            // min_x..max_x,
+            // min_y..max_y,
+            (0..600, 0..600),
+        ));
+
+        for pt in &pts {
+            root.draw(
+                &(EmptyElement::at((pt.x, -pt.y))
+                    + Circle::new((0, 0), 3, ShapeStyle::from(&BLACK).filled())),
+            )?;
         }
     }
 
