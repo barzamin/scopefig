@@ -1,89 +1,147 @@
-use anyhow::Result;
-use itertools::izip;
-use jack::{
-    AudioOut, Client, ClientOptions, Control, NotificationHandler, Port, ProcessHandler,
-    ProcessScope,
+use std::{
+    fs::{self, File},
+    io::{BufWriter, Seek, Write},
+    path::PathBuf,
 };
 
-#[derive(Debug)]
-struct Ports {
-    x: Port<AudioOut>,
-    y: Port<AudioOut>,
-    z: Port<AudioOut>,
+use anyhow::{anyhow, Result};
+use hound::WavWriter;
+use kv_log_macro as log;
+use lyon_geom::{LineSegment, Point};
+use lyon_path::Path;
+use lyon_path::{iterator::Flattened, PathEvent};
+use structopt::StructOpt;
+use usvg::{prelude::*, Align, FitTo, Size, Transform, ViewBox};
+
+mod svg;
+
+#[derive(Debug, StructOpt)]
+struct Args {
+    #[structopt(parse(from_os_str))]
+    input: PathBuf,
+
+    #[structopt(short, long, parse(from_os_str), default_value = "out.wav")]
+    output: PathBuf,
 }
 
-impl Ports {
-    pub fn new(client: &Client) -> Result<Self, jack::Error> {
-        Ok(Self {
-            x: client.register_port("x", AudioOut::default())?,
-            y: client.register_port("y", AudioOut::default())?,
-            z: client.register_port("z", AudioOut::default())?,
-        })
+const F_s: u32 = 44_100; // Hz
+const DRAW_VELOCITY: f32 = 50.; // units/s
+                                  // const TRANSIT_VELOCITY: f32 = 40000.; // units/s
+const TOLERANCE: f32 = 0.001;
+
+fn draw_line(pts: &mut Vec<Point<f32>>, line: LineSegment<f32>) {
+    log::debug!("emit line {:?}", line);
+
+    let n_samples: usize = (F_s as f32 * line.length() / DRAW_VELOCITY).trunc() as usize;
+    log::debug!("  drawing line with n_samples: {}", n_samples);
+    for t in (0..n_samples).map(|i| i as f32 / n_samples as f32) {
+        log::trace!("    generate pt t : {}, sample : {:?}", t, line.sample(t));
+        pts.push(line.sample(t));
     }
 }
 
-#[derive(Debug)]
-struct RTProcess {
-    ports: Ports,
-    sample_rate: usize,
-    frame_t: f64,
-    t: f64,
-}
+fn write_wav<W>(wtr: W, pts: &[Point<f32>]) -> Result<(), hound::Error>
+where
+    W: Write + Seek,
+{
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: F_s,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
 
-const SCAN_RATE: f64 = 100.; // 100hz => 2pi rad around the cardioid per 1/100 s.
-
-impl ProcessHandler for RTProcess {
-    fn process(&mut self, _: &Client, ps: &ProcessScope) -> Control {
-        let x_out = self.ports.x.as_mut_slice(ps);
-        let y_out = self.ports.y.as_mut_slice(ps);
-        let z_out = self.ports.z.as_mut_slice(ps);
-
-        for (x, y, z) in izip!(x_out.iter_mut(), y_out.iter_mut(), z_out.iter_mut()) {
-            let t = self.t * 2. * std::f64::consts::PI * SCAN_RATE;
-
-            let scl = (1.-0.2)-(self.t*2.*std::f64::consts::PI*0.5).cos()*0.2;
-
-            *x = (scl*( 16.*t.sin().powi(3) )/18.) as f32;
-            *y = (scl*( 13.*t.cos() - 5.*(2.*t).cos() - 2.*(3.*t).cos() - (4.*t).cos() )/18.) as f32;
-
-            // *z = if (t % 1.) > 0.5 { 1.0 } else {0.0} as f32;
-            *z = 0.;
-
-            self.t += self.frame_t;
+    let mut wav_wtr = hound::WavWriter::new(wtr, spec)?;
+    for _ in 0..10 {
+        for pt in pts {
+            wav_wtr.write_sample(pt.x)?;
+            wav_wtr.write_sample(pt.y)?;
         }
-
-        Control::Continue
     }
+    wav_wtr.finalize()?;
+
+    Ok(())
 }
 
-struct NotifProcess {}
-impl NotificationHandler for NotifProcess {
-    fn xrun(&mut self, _client: &Client) -> Control {
-        println!("xrun!");
+fn transform(
+    base_txform: usvg::Transform,
+    view_box: ViewBox,
+    size: usvg::Size,
+) -> lyon_geom::Transform<f32> {
+    let scale = (2. / view_box.rect.width().max(view_box.rect.height())) as f32;
+    log::debug!("scale: {}", scale);
 
-        Control::Continue
-    }
+    lyon_geom::Transform::<f32>::new(
+        base_txform.a as f32,
+        base_txform.b as f32,
+        base_txform.c as f32,
+        base_txform.d as f32,
+        base_txform.e as f32,
+        base_txform.f as f32,
+    )
+    .then_translate(lyon_geom::Vector::new(
+        (-view_box.rect.width() / 2.) as f32,
+        (-view_box.rect.height() / 2.) as f32,
+    ))
+    .then_scale(scale, scale)
 }
 
 fn main() -> Result<()> {
-    let (client, _status) = Client::new("scopefig", ClientOptions::NO_START_SERVER)?;
+    femme::with_level(femme::LevelFilter::Trace);
 
-    let ports = Ports::new(&client)?;
+    let args = Args::from_args();
 
-    let process_handler = RTProcess {
-        ports,
-        sample_rate: client.sample_rate(),
-        frame_t: 1.0 / client.sample_rate() as f64,
-        t: 0.0f64,
-    };
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_file(args.input, &opt)?;
 
-    let notif_handler = NotifProcess {};
-    let active_client = client.activate_async(notif_handler, process_handler)?;
+    let mut pts: Vec<Point<f32>> = vec![];
 
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(10));
+    let view_box = tree.svg_node().view_box;
+    let size = tree.svg_node().size;
+    log::info!("view_box: {:?}, size: {:?}", view_box, size);
+    log::info!("{:?}", size.fit_view_box(&view_box));
+
+    for node in tree.root().descendants() {
+        if let usvg::NodeKind::Path(ref p) = *node.borrow() {
+            log::debug!("handling node {:?}", node);
+            let mut txform = transform(node.transform(), view_box, size);
+            println!("txform: {:?}", txform);
+            let flattened = Flattened::new(TOLERANCE, svg::convert_path(p));
+            for evt in flattened {
+                log::trace!(" -> {:?}", evt);
+                match evt {
+                    lyon_path::Event::Begin { at } => {
+                        // slew at full speed to point
+                        if let Some(last) = pts.last() {
+                        } else {
+                        }
+                        pts.push(txform.transform_point(at));
+                    }
+                    lyon_path::Event::End { last, first, close } => {
+                        if close {
+                            let line = LineSegment {
+                                from: txform.transform_point(last),
+                                to: txform.transform_point(first),
+                            };
+                            draw_line(&mut pts, line);
+                        }
+                    }
+                    lyon_path::Event::Line { from, to } => {
+                        let line = LineSegment {
+                            from: txform.transform_point(from),
+                            to: txform.transform_point(to),
+                        };
+                        draw_line(&mut pts, line);
+                    }
+                    _ => {
+                        log::warn!("unsupported path element {:?}", evt);
+                    }
+                }
+            }
+        }
     }
-    active_client.deactivate()?;
+
+    write_wav(BufWriter::new(File::create(args.output)?), &pts)?;
 
     Ok(())
 }

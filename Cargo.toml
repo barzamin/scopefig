@@ -6,5 +6,10 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
-jack = "0.6"
-itertools = "0.10"
+hound = "3.4"
+structopt = "0.3"
+femme = "2.1"
+kv-log-macro = "1.0"
+lyon_geom = "0.17"
+lyon_path = "0.17"
+usvg = "0.14"
