@@ -108,7 +108,7 @@ fn transform(
         (-view_box.rect.width() / 2.) as f32,
         (-view_box.rect.height() / 2.) as f32,
     ))
-    .then_scale(scale, scale)
+    .then_scale(scale, -scale)
 }
 
 fn main() -> Result<()> {
@@ -178,7 +178,7 @@ fn main() -> Result<()> {
     ));
 
     for pt in &pts {
-        root.draw(&(EmptyElement::at((pt.x, pt.y)) + Circle::new((0, 0), 3, ShapeStyle::from(&BLACK).filled())))?;
+        root.draw(&(EmptyElement::at((pt.x, -pt.y)) + Circle::new((0, 0), 3, ShapeStyle::from(&BLACK).filled())))?;
     }
 
 
