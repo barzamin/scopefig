@@ -33,7 +33,7 @@ const TOLERANCE: f32 = 0.001;
 fn draw_line(pts: &mut Vec<Point<f32>>, line: LineSegment<f32>) {
     // log::debug!("emit line {:?}", line);
 
-    let n_samples: usize = (F_s as f32 * line.length() * DRAW_DWELL).trunc() as usize;
+    let n_samples: usize = ((F_s as f32 * line.length() * DRAW_DWELL).trunc() as usize).max(1);
     // log::debug!("  drawing line with n_samples: {}", n_samples);
     for t in (0..n_samples).map(|i| i as f32 / n_samples as f32) {
         // log::trace!("    generate pt t : {}, sample : {:?}", t, line.sample(t));
