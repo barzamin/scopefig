@@ -25,17 +25,14 @@ struct Args {
 }
 
 const F_s: u32 = 44_100; // Hz
-const DRAW_DWELL: f32 = 0.01; // s/unit
-const JUMP_TIME: f32 = 0.0005; // sec per jump
-const TOLERANCE: f32 = 0.01;
+const DRAW_DWELL: f32 = 0.01; // s/screenspace unit
+const JUMP_TIME: f32 = 0.0005; // s per jump
+const TOLERANCE: f32 = 0.01; // screenspace units
 
 fn draw_line(pts: &mut Vec<Point<f32>>, line: LineSegment<f32>) {
-    // log::debug!("emit line {:?}", line);
-
     let n_samples: usize = ((F_s as f32 * line.length() * DRAW_DWELL).trunc() as usize).max(1);
-    // log::debug!("  drawing line with n_samples: {}", n_samples);
+
     for t in (0..n_samples).map(|i| i as f32 / n_samples as f32) {
-        // log::trace!("    generate pt t : {}, sample : {:?}", t, line.sample(t));
         pts.push(line.sample(t));
     }
 }
@@ -179,8 +176,6 @@ fn main() -> Result<()> {
         let root = root.apply_coord_spec(Cartesian2d::<RangedCoordf32, RangedCoordf32>::new(
             -1f32..1f32,
             -1f32..1f32,
-            // min_x..max_x,
-            // min_y..max_y,
             (0..600, 0..600),
         ));
 
