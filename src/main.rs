@@ -29,6 +29,7 @@ const DRAW_DWELL: f32 = 0.01; // s/screenspace unit
 const JUMP_TIME: f32 = 0.0005; // s per jump
 const TOLERANCE: f32 = 0.01; // screenspace units
 
+/// Emit a line into a waypoint buffer given a [LineSegment] describing it, using appropriate dwell times.
 fn draw_line(pts: &mut Vec<Point<f32>>, line: LineSegment<f32>) {
     let n_samples: usize = ((F_s as f32 * line.length() * DRAW_DWELL).trunc() as usize).max(1);
 
@@ -37,6 +38,7 @@ fn draw_line(pts: &mut Vec<Point<f32>>, line: LineSegment<f32>) {
     }
 }
 
+/// Easing function used to compute waypoint coordinates when jumping between locations (and attempting not to persist a trace).
 fn jump_easing(k: i32, x: f32) -> f32 {
     if x <= 0.5 {
         (1. / (0.5f32).powi(k - 1)) * x.powi(k)
@@ -45,6 +47,8 @@ fn jump_easing(k: i32, x: f32) -> f32 {
     }
 }
 
+/// Emit a jump into the waypoint buffer, jumping `from` a point `to` another.
+/// If `from` is `None`, we just emit the final point `to`.
 fn jump(pts: &mut Vec<Point<f32>>, from: Option<Point<f32>>, to: Point<f32>) {
     log::debug!("emit jump {:?} -> {:?}", from, to);
 
@@ -64,6 +68,7 @@ fn jump(pts: &mut Vec<Point<f32>>, from: Option<Point<f32>>, to: Point<f32>) {
     }
 }
 
+/// Writes a slice of waypoints as a wav file to a given [Write] sink.
 fn write_wav<W>(wtr: W, pts: &[Point<f32>]) -> Result<(), hound::Error>
 where
     W: Write + Seek,
@@ -87,6 +92,8 @@ where
     Ok(())
 }
 
+/// Converts a usvg transform to a lyon transform.
+/// Note that we transform within Lyon since it's less buggy.
 fn transform_usvg2euclid(tx: usvg::Transform) -> lyon_geom::Transform<f32> {
     lyon_geom::Transform::<f32>::new(
         tx.a as f32,
@@ -98,6 +105,7 @@ fn transform_usvg2euclid(tx: usvg::Transform) -> lyon_geom::Transform<f32> {
     )
 }
 
+/// Combines a viewbox and base transform giving an overall Lyon transform to apply to SVG coordinates to get them onscreen.
 fn transform(
     base_txform: usvg::Transform,
     view_box: ViewBox,

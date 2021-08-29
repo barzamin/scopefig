@@ -1,10 +1,12 @@
 use lyon_geom::Point;
 use lyon_path::PathEvent;
 
+/// Casting helper for [Point] construction.
 fn point(x: &f64, y: &f64) -> Point<f32> {
     Point::new(*x as f32, *y as f32)
 }
 
+/// Iterator returned by [convert_path], yielding [PathEvent]s to draw a given SVG path as a Lyon path.
 pub struct PathConvIter<'a> {
     iter: std::slice::Iter<'a, usvg::PathSegment>,
     prev: Point<f32>,
@@ -95,6 +97,7 @@ impl<'l> Iterator for PathConvIter<'l> {
     }
 }
 
+/// Draws a SVG path as a Lyon path, emitting an iterator which yields [PathEvent]s.
 pub fn convert_path<'a>(p: &'a usvg::Path) -> PathConvIter<'a> {
     PathConvIter {
         iter: p.data.iter(),
